@@ -161,7 +161,7 @@ else
 	lib_path = $(VTA_HW_PATH)/$(BUILD_NAME)/$(VTA_LIBNAME).so
 endif
 
-default: lint lib
+default: lib
 
 lint:
 	sbt scalastyle
