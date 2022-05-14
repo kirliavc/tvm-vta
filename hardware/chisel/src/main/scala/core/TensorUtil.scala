@@ -39,9 +39,9 @@ class TensorParams(tensorType: String = "none")(implicit p: Parameters) extends 
     errorMsg)
 
   val (tensorLength, tensorWidth, tensorElemBits) =
-    if (tensorType == "inp")
+    if (tensorType == "inp")// 1 * 16 * 8
       (p(CoreKey).batch, p(CoreKey).blockIn, p(CoreKey).inpBits)
-    else if (tensorType == "wgt")
+    else if (tensorType == "wgt")// 16 * 16 * 8
       (p(CoreKey).blockOut, p(CoreKey).blockIn, p(CoreKey).wgtBits)
     else if (tensorType == "acc")
       (p(CoreKey).batch, p(CoreKey).blockOut, p(CoreKey).accBits)
@@ -196,10 +196,13 @@ class TensorParams(tensorType: String = "none")(implicit p: Parameters) extends 
 
   val tensorSizeBits = tensorLength * tensorWidth * tensorElemBits
   val tsSizeRatio = tensorSizeBits / memBlockBits
+  // wgt = 32
   val clSizeRatio = memBlockBits / tensorSizeBits
 
   val lenSplit = tensorLength / splitLength // tensor rows in a group
+  
   val widthSplit = tensorWidth / splitWidth // tensor colums in a group
+  println(s"type: ${tensorType}, lensplit: ${lenSplit}, widthSplit: ${widthSplit}, tensorSizeBits: ${tensorSizeBits}, memBlockBits: ${memBlockBits}")
   require(lenSplit > 0 && widthSplit > 0, "-F- wrong split")
 
   // tensor condsiders groups as a continous data, gemm generates a data window
@@ -257,6 +260,7 @@ class TensorParams(tensorType: String = "none")(implicit p: Parameters) extends 
  */
 class TensorMaster(tensorType: String = "none")
   (implicit p: Parameters) extends TensorParams(tensorType) {
+  println(s"tensorType:${tensorType},splitLength:${splitLength},splitWidth:${splitWidth}")
   val rd = Vec(splitLength * splitWidth, new Bundle {
     val idx = ValidIO(UInt(memAddrBits.W))
     val data = Flipped(

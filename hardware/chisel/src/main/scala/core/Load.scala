@@ -31,7 +31,7 @@ import vta.shell._
  * loading 1D and 2D tensors to scratchpads, so it can be used by
  * other modules such as Compute.
  */
-class Load(debug: Boolean = false)(implicit p: Parameters) extends Module {
+class Load(debug: Boolean = true)(implicit p: Parameters) extends Module {
   val mp = p(ShellKey).memParams
   val io = IO(new Bundle {
     val i_post = Input(Bool())
@@ -42,6 +42,8 @@ class Load(debug: Boolean = false)(implicit p: Parameters) extends Module {
     val vme_rd = Vec(2, new VMEReadMaster)
     val inp = new TensorClient(tensorType = "inp")
     val wgt = new TensorClient(tensorType = "wgt")
+    val is_start = Output(Bool())
+    val is_done = Output(Bool())
   })
   val sIdle :: sSync :: sExe :: Nil = Enum(3)
   val state = RegInit(sIdle)
@@ -59,7 +61,8 @@ class Load(debug: Boolean = false)(implicit p: Parameters) extends Module {
 
   val start = inst_q.io.deq.valid & Mux(dec.io.pop_next, s.io.sready, true.B)
   val done = Mux(dec.io.isInput, tensorLoad(0).io.done, tensorLoad(1).io.done)
-
+  io.is_start := (state === sIdle) && start && (!dec.io.isSync)
+  io.is_done := state === sExe & done
   // control
   switch(state) {
     is(sIdle) {
@@ -107,6 +110,13 @@ class Load(debug: Boolean = false)(implicit p: Parameters) extends Module {
   if (debug) {
     // start
     when(state === sIdle && start) {
+      when(dec.io.push_next){
+        printf("[Load] push next\n")
+      }
+      when(dec.io.pop_next){
+        printf("[Load] pop_next\n")
+      }
+
       when(dec.io.isSync) {
         printf("[Load] start sync\n")
       }.elsewhen(dec.io.isInput) {

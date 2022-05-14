@@ -30,7 +30,7 @@ import vta.shell._
  * This module instantiate the TensorStore unit which is in charge
  * of storing 1D and 2D tensors to main memory.
  */
-class Store(debug: Boolean = false)(implicit p: Parameters) extends Module {
+class Store(debug: Boolean = true)(implicit p: Parameters) extends Module {
   val mp = p(ShellKey).memParams
   val io = IO(new Bundle {
     val i_post = Input(Bool())
@@ -39,6 +39,8 @@ class Store(debug: Boolean = false)(implicit p: Parameters) extends Module {
     val out_baddr = Input(UInt(mp.addrBits.W))
     val vme_wr = new VMEWriteMaster
     val out = new TensorClient(tensorType = "out")
+    val is_start = Output(Bool())
+    val is_done = Output(Bool())
   })
   val sIdle :: sSync :: sExe :: Nil = Enum(3)
   val state = RegInit(sIdle)
@@ -53,7 +55,8 @@ class Store(debug: Boolean = false)(implicit p: Parameters) extends Module {
 
   val start = inst_q.io.deq.valid & Mux(dec.io.pop_prev, s.io.sready, true.B)
   val done = tensorStore.io.done
-
+  io.is_start := state === sIdle & start & (!dec.io.isSync)
+  io.is_done := (state === sExe & done) 
   // control
   switch(state) {
     is(sIdle) {
@@ -99,6 +102,12 @@ class Store(debug: Boolean = false)(implicit p: Parameters) extends Module {
         printf("[Store] start sync\n")
       }.elsewhen(dec.io.isStore) {
         printf("[Store] start\n")
+      }
+      when(dec.io.push_prev){
+        printf("[Store] push_prev\n")
+      }
+      when(dec.io.pop_prev){
+        printf("[Store] pop_prev\n")
       }
     }
     // done

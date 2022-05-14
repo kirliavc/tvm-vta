@@ -98,6 +98,7 @@ class DotProduct(aBits: Int = 8, bBits: Int = 8, blockIn: Int = 16) extends Modu
     pow(2, log2Ceil(blockIn) - i).toInt) // # of total layers
   val p = log2Ceil(blockIn / 2) + 1 // # of adder layers
   val m = Seq.fill(s(0))(Module(new MAC(aBits, bBits, cBits = 1, flopIn = p < 6))) // # of total vector pairs
+  //在加法树中，只有一层是pipeadder，其余的都是comb adder
   val a = Seq.tabulate(p)(
     i =>
       Seq.fill(s(i + 1))(
@@ -137,7 +138,7 @@ class DotProduct(aBits: Int = 8, bBits: Int = 8, blockIn: Int = 16) extends Modu
 /** Perform matrix-vector-multiplication based on DotProduct */
 class MatrixVectorMultiplication(implicit p: Parameters) extends Module {
   val accBits = p(CoreKey).accBits
-  val size = p(CoreKey).blockOut / p(CoreKey).blockOutFactor
+  val size = p(CoreKey).blockOut / p(CoreKey).blockOutFactor    //16
   val batch = p(CoreKey).batch
   val inpBits = p(CoreKey).inpBits
   val wgtBits = p(CoreKey).wgtBits
@@ -150,6 +151,7 @@ class MatrixVectorMultiplication(implicit p: Parameters) extends Module {
     val acc_o = new TensorClientData(tensorType = "acc")
     val out = new TensorClientData(tensorType = "out")
   })
+  // 16 * 16 mac
   val dot = Seq.fill(batch)(Seq.fill(size)(
     Module(new DotProduct(aBits = inpBits, bBits = wgtBits, size))))
   // Latency is defined as two in the following, because there is one cycle in the MAC module,
@@ -179,8 +181,8 @@ class MatrixVectorMultiplication(implicit p: Parameters) extends Module {
 /** Perform matrix-vector-multiplication based on DotProduct */
 class MatrixVectorMultiplicationBypass(implicit p: Parameters) extends Module {
   val accBits = p(CoreKey).accBits
-  val blockOut = p(CoreKey).blockOut / p(CoreKey).blockOutFactor
-  val blockIn = p(CoreKey).blockIn
+  val blockOut = p(CoreKey).blockOut / p(CoreKey).blockOutFactor  // 16
+  val blockIn = p(CoreKey).blockIn  // 16
   val batch   = p(CoreKey).batch
   val inpBits = p(CoreKey).inpBits
   val wgtBits = p(CoreKey).wgtBits
@@ -312,242 +314,12 @@ abstract class TensorGemmIfc(implicit p: Parameters) extends Module {
   })
 }
 
-/** TensorGemmSimple
- *
- * This unit instantiate the MatrixVectorMultiplication and go over the
- * micro-ops (uops) which are used to read inputs, weights and biases,
- * and writes results back to the acc and out scratchpads.
- *
- * Also, TensorGemmSimple uses the reset field in the Gemm instruction to
- * clear or zero-out the acc-scratchpad locations based on the micro-ops.
- */
-class TensorGemmSimple(debug: Boolean = false)(implicit p: Parameters) extends TensorGemmIfc {
 
-  require(p(CoreKey).blockOutFactor == 1,
-    "-F- Split GEMM not supported. Use TensorGemmPipelinedSplit or set blockOutFactor to 1")
-  val sIdle :: sReadUop :: sComputeIdx :: sReadTensor :: sExe :: sWait :: Nil = Enum(6)
-  val state = RegInit(sIdle)
-  io.state := state
-  val mvc = Module(new MatrixVectorMultiplication)
-  val dec = io.dec
-  val uop_idx = Reg(chiselTypeOf(dec.uop_end))
-  val uop_end = dec.uop_end
-  val uop_acc = Reg(chiselTypeOf(dec.uop_end))
-  val uop_inp = Reg(chiselTypeOf(dec.uop_end))
-  val uop_wgt = Reg(chiselTypeOf(dec.uop_end))
-  val cnt_o = Reg(chiselTypeOf(dec.lp_0))
-  val acc_o = Reg(chiselTypeOf(dec.uop_end))
-  val inp_o = Reg(chiselTypeOf(dec.uop_end))
-  val wgt_o = Reg(chiselTypeOf(dec.uop_end))
-  val cnt_i = Reg(chiselTypeOf(dec.lp_1))
-  val acc_i = Reg(chiselTypeOf(dec.uop_end))
-  val inp_i = Reg(chiselTypeOf(dec.uop_end))
-  val wgt_i = Reg(chiselTypeOf(dec.uop_end))
-
-  val inflight = Reg(UInt(inflightBits.W))
-  io.inflight := inflight
-  // Latency is defined as two in the following, because there is one cycle in the MAC module,
-  // and another cycle in the pipelined adders as the first layer of the accumulator
-  val wrpipe = Module(new Pipe(chiselTypeOf(dec.uop_end), latency = 2))
-  val cond = cnt_o === dec.lp_0 - 1.U &
-    cnt_i === dec.lp_1 - 1.U &
-    uop_idx === uop_end - 1.U
-
-  val done = inflight === 0.U &
-    ((state === sExe) & cond | state === sWait)
-
-  switch(state) {
-    is(sIdle) {
-      when(io.start) {
-        state := sReadUop
-      }
-    }
-    is(sReadUop) {
-      state := sComputeIdx
-    }
-    is(sComputeIdx) {
-      state := sReadTensor
-    }
-    is(sReadTensor) {
-      state := sExe
-    }
-    is(sExe) {
-      when(cond) {
-        when(inflight =/= 0.U) {
-          state := sWait
-        }.otherwise {
-          state := sIdle
-        }
-      }.otherwise {
-        state := sReadUop
-      }
-    }
-    is(sWait) {
-      when(inflight === 0.U) {
-        state := sIdle
-      }
-    }
-  }
-
-  when(state === sIdle) {
-    inflight := 0.U
-  }.elsewhen(!dec.reset) {
-    when((state === sReadTensor) && mvc.io.acc_o.data.valid) { // issue & commit
-    }.elsewhen(state === sReadTensor) { // issue a tensor
-      assert(inflight =/= ((1<<inflightBits)-1).U)
-      inflight := inflight + 1.U
-    }.elsewhen(mvc.io.acc_o.data.valid) { // commit a tensor
-      assert(inflight =/= 0.U)
-      inflight := inflight - 1.U
-    }
-  }
-
-  when(
-    state === sIdle ||
-      (state === sExe &&
-        uop_idx === uop_end - 1.U)) {
-    uop_idx := dec.uop_begin
-  }.elsewhen(state === sExe && dec.uop_begin =/= uop_end) {
-    uop_idx := uop_idx + 1.U
-  }
-
-  when(state === sIdle) {
-    cnt_o := 0.U
-    acc_o := 0.U
-    inp_o := 0.U
-    wgt_o := 0.U
-  }.elsewhen(
-    state === sExe &&
-      uop_idx === uop_end - 1.U &&
-      cnt_i === dec.lp_1 - 1.U) {
-    cnt_o := cnt_o + 1.U
-    acc_o := acc_o + dec.acc_0
-    inp_o := inp_o + dec.inp_0
-    wgt_o := wgt_o + dec.wgt_0
-  }
-
-  when(state === sIdle) {
-    cnt_i := 0.U
-    acc_i := 0.U
-    inp_i := 0.U
-    wgt_i := 0.U
-  }.elsewhen(state === sReadUop && cnt_i === dec.lp_1) {
-    cnt_i := 0.U
-    acc_i := acc_o
-    inp_i := inp_o
-    wgt_i := wgt_o
-  }.elsewhen(state === sExe && uop_idx === uop_end - 1.U) {
-    cnt_i := cnt_i + 1.U
-    acc_i := acc_i + dec.acc_1
-    inp_i := inp_i + dec.inp_1
-    wgt_i := wgt_i + dec.wgt_1
-  }
-
-  when(state === sComputeIdx && io.uop.data.valid) {
-    uop_acc := io.uop.data.bits.u0 + acc_i
-    uop_inp := io.uop.data.bits.u1 + inp_i
-    uop_wgt := io.uop.data.bits.u2 + wgt_i
-  }
-
-  wrpipe.io.enq.valid := state === sExe & ~dec.reset
-  wrpipe.io.enq.bits := uop_acc
-
-  // uop
-  io.uop.idx.valid := state === sReadUop
-  io.uop.idx.bits := uop_idx
-
-  // inp
-  io.inp.rd(0).idx.valid := state === sReadTensor
-  io.inp.rd(0).idx.bits := uop_inp
-  io.inp.tieoffWrite() // read-only
-
-  // wgt
-  io.wgt.rd(0).idx.valid := state === sReadTensor
-  io.wgt.rd(0).idx.bits := uop_wgt
-  io.wgt.tieoffWrite() // read-only
-
-  // acc_i
-  io.acc.rd(0).idx.valid := state === sReadTensor
-  io.acc.rd(0).idx.bits := uop_acc
-
-  // mvc
-  mvc.io.reset := dec.reset & state === sExe
-  mvc.io.inp.data <> io.inp.rd(0).data
-  mvc.io.wgt.data <> io.wgt.rd(0).data
-  mvc.io.acc_i.data <> io.acc.rd(0).data
-
-  // acc_o
-  io.acc.wr(0).valid := mvc.io.acc_o.data.valid &
-    Mux(dec.reset, true.B, wrpipe.io.deq.valid)
-  io.acc.wr(0).bits.idx := Mux(dec.reset, uop_acc, wrpipe.io.deq.bits)
-  io.acc.wr(0).bits.data <> mvc.io.acc_o.data.bits
-
-  // out
-  io.out.wr(0).valid := mvc.io.out.data.valid & wrpipe.io.deq.valid
-  io.out.wr(0).bits.idx := wrpipe.io.deq.bits
-  io.out.wr(0).bits.data <> mvc.io.out.data.bits
-  io.out.tieoffRead() // write-only
-
-  io.done := done
-
-  if (debug) {
-    printf("[TensorGemm] [state]:%d [inflight]:%d\n", state, inflight)
-
-    when(state === sReadUop && ~dec.reset) {
-      printf("[TensorGemm] [uop] idx:%x\n", uop_idx)
-    }
-
-    when(state === sReadTensor && ~dec.reset) {
-      printf("[TensorGemm] [uop] acc:%x inp:%x wgt:%x\n", uop_acc, uop_inp, uop_wgt)
-    }
-
-    io.inp.rd(0).data.bits.zipWithIndex.foreach {
-      case (r, i) =>
-        when(io.inp.rd(0).data.valid && ~dec.reset) {
-          printf("[TensorGemm] [inp] i:%x val:%x\n", i.U, r.asUInt)
-        }
-    }
-
-    io.wgt.rd(0).data.bits.zipWithIndex.foreach {
-      case (r, i) =>
-        when(io.wgt.rd(0).data.valid && ~dec.reset) {
-          printf("[TensorGemm] [wgt] i:%x val:%x\n", i.U, r.asUInt)
-        }
-    }
-
-    io.acc.rd(0).data.bits.foreach { tensor =>
-      tensor.zipWithIndex.foreach {
-        case (elem, i) =>
-          when(io.acc.rd(0).data.valid && ~dec.reset) {
-            printf("[TensorGemm] [acc_i] i:%x val:%x\n", i.U, elem)
-          }
-      }
-    }
-
-    mvc.io.acc_o.data.bits.foreach { tensor =>
-      tensor.zipWithIndex.foreach {
-        case (elem, i) =>
-          when(mvc.io.acc_o.data.valid && ~dec.reset) {
-            printf("[TensorGemm] [acc_o] i:%x val:%x\n", i.U, elem)
-          }
-      }
-    }
-
-    mvc.io.out.data.bits.foreach { tensor =>
-      tensor.zipWithIndex.foreach {
-        case (elem, i) =>
-          when(mvc.io.out.data.valid && ~dec.reset) {
-            printf("[TensorGemm] [out] i:%x val:%x\n", i.U, elem)
-          }
-      }
-    }
-  }
-}
 
 class TensorGemmPipelinedSplit (implicit p: Parameters) extends TensorGemmIfc {
   val sIdle::sRun::sWait::Nil = Enum(3);
   val numMVMs = p(CoreKey).blockOutFactor
-  val numOuts = p(CoreKey).blockOut / numMVMs
+  val numOuts = p(CoreKey).blockOut / numMVMs   // 16
   require (numOuts > 0, "-F- Cannot factor more groups than blockOut")
   val batch = p(CoreKey).batch
 

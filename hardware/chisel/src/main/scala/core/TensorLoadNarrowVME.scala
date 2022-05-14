@@ -130,6 +130,7 @@ class TensorLoadNarrowVME(tensorType: String = "none", debug: Boolean = false)(
   //--------------------
 
   val memSizeRatio = tp.tsSizeRatio
+  // wgt: 32
   val splitDataFactor = tp.splitWidth * tp.splitLength
   val splitMemBlockFactor = if (splitDataFactor > memSizeRatio) {
     require((splitDataFactor/memSizeRatio) * memSizeRatio == splitDataFactor,
@@ -147,6 +148,7 @@ class TensorLoadNarrowVME(tensorType: String = "none", debug: Boolean = false)(
   }
   // one macro has a VME memory read bit width or read/write group bit width
   //different groups can read/write scratchpad separately
+  println(s"tensor type: ${tensorType}, bank num: ${memSizeRatio * splitMemBlockFactor}, depth: ${tp.memDepth}, width = ${tp.memBlockBits/splitMemBlockFactor}, splitfactor = $splitDataFactor\n")
   val tensorFile = Seq.fill(memSizeRatio * splitMemBlockFactor
   ) {
     SyncReadMem(tp.memDepth, UInt((tp.memBlockBits/splitMemBlockFactor).W))
@@ -260,15 +262,15 @@ class TensorLoadNarrowVME(tensorType: String = "none", debug: Boolean = false)(
     }
   }
   if (debug) {
-    when(isZeroPadWrite) {
-      printf(s"[TensorLoad] $tensorType isZeroPadWrite data zpDestIdx:%d\n",
-        zpDestIdx)
-    }
-    when (vmeDataFirePipe) {
-      printf(s"[TensorLoad] $tensorType data rdDataDestCol:%d rdDataDestIdx:%d\n",
-        rdDataDestCol,
-        rdDataDestIdx)
-    }
+    // when(isZeroPadWrite) {
+    //   printf(s"[TensorLoad] $tensorType isZeroPadWrite data zpDestIdx:%d\n",
+    //     zpDestIdx)
+    // }
+    // when (vmeDataFirePipe) {
+    //   printf(s"[TensorLoad] $tensorType data rdDataDestCol:%d rdDataDestIdx:%d\n",
+    //     rdDataDestCol,
+    //     rdDataDestIdx)
+    // }
   }
 
   // read-from-sram
@@ -564,7 +566,7 @@ class GenVMECmd(tensorType: String = "none", debug: Boolean = false)(
 
 
   val dec = io.inst.asTypeOf(new MemDecode)
-
+  
   val rdCmdExtAddr = Reg(UInt(mp.addrBits.W)) // current address in the row
   val maxTransfer = (1 << mp.lenBits).U // max number of blocks in transfer
   // from old data ctrl
@@ -595,6 +597,7 @@ class GenVMECmd(tensorType: String = "none", debug: Boolean = false)(
   // set which source row of data to read. dec.ysize defines the number of rows
   val srcRowIdx = Reg(UInt(dec.ysize.getWidth.W)) // current row of stride read
   when (io.start) {
+    printf(p"[VMECmdInst] : $dec\n")
     srcRowIdx := 0.U // 1st row
   }.elsewhen (stride) {
     srcRowIdx := srcRowIdx + 1.U // increment row
@@ -717,12 +720,12 @@ class GenVMECmd(tensorType: String = "none", debug: Boolean = false)(
     rdCmdValid := false.B
   }
   if(debug) {
-    when (io.vmeCmd.fire()) {
-      printf(s"[GenVMECmd] $tensorType cmd data rdCmdDestBlockIdx:%b " +
-        s" length:%d \n",
-        rdCmdDestBlockIdx,
-        readLen)
-    }
+    // when (io.vmeCmd.fire()) {
+    //   printf(s"[GenVMECmd] $tensorType cmd data rdCmdDestBlockIdx:%b " +
+    //     s" length:%d \n",
+    //     rdCmdDestBlockIdx,
+    //     readLen)
+    // }
   }
   // read-from-dram
   require(io.vmeCmd.bits.tag.getWidth >= rdCmdDestBlockIdx.getWidth,

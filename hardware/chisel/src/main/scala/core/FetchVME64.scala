@@ -54,6 +54,7 @@ class Fetch64Bit(debug: Boolean = false)(implicit p: Parameters) extends Module 
       val st = Decoupled(UInt(INST_BITS.W))
     }
   })
+  val cur_cycle = RegInit(0.U(20.W))
   val entries_q = 1 << (mp.lenBits - 1) // one-instr-every-two-vme-word
   val inst_q = Module(new SyncQueue(UInt(INST_BITS.W), entries_q))
   val dec = Module(new FetchDecode)

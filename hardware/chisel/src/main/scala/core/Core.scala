@@ -69,7 +69,8 @@ class Core(implicit p: Parameters) extends Module {
   val compute = Module(new Compute)
   val store = Module(new Store)
   val ecounters = Module(new EventCounters)
-
+  val cycle_cnt = RegInit(0.U(20.W))
+  cycle_cnt := cycle_cnt + 1.U
   // Read(rd) and write(wr) from/to memory (i.e. DRAM)
   io.vme.rd(0) <> fetch.io.vme_rd
   io.vme.rd(1) <> compute.io.vme_rd(0)
@@ -114,8 +115,28 @@ class Core(implicit p: Parameters) extends Module {
   io.vcr.ecnt <> ecounters.io.ecnt
   io.vcr.ucnt <> ecounters.io.ucnt
   ecounters.io.acc_wr_event := compute.io.acc_wr_event
-
+  
   // Finish instruction is executed and asserts the VCR finish flag
   val finish = RegNext(compute.io.finish)
   io.vcr.finish := finish
+
+
+  when(load.io.is_start){
+    printf(p"Load start: cycle = ${cycle_cnt}\n")
+  }
+  when(load.io.is_done){
+    printf(p"Load done: cycle = ${cycle_cnt}\n")
+  }
+  when(compute.io.is_start){
+    printf(p"Compute start: cycle = ${cycle_cnt}\n")
+  }
+  when(compute.io.is_done){
+    printf(p"Compute done: cycle = ${cycle_cnt}\n")
+  }
+  when(store.io.is_start){
+    printf(p"Store start: cycle = ${cycle_cnt}\n")
+  }
+  when(store.io.is_done){
+    printf(p"Store done: cycle = ${cycle_cnt}\n")
+  }
 }

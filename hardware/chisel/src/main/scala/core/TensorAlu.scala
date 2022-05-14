@@ -144,12 +144,14 @@ class TensorAluIndexGenerator(debug: Boolean = false)(implicit p: Parameters) ex
 
   io.valid := running && advance
   io.src_valid := running && !advance
+  // output is *_i
   io.dst_idx := dst_i
   io.src_idx := src_i
   io.uop_idx := uop_idx
+  // uop: uop_begin ~ uop_end
   io.cnt_o := cnt_o
   io.cnt_i := cnt_i
-
+  // uop -> *_i -> *_o, 3-level loop
   when(!running) {
     cnt_i := 0.U; dst_i := 0.U; src_i := 0.U;
     cnt_o := 0.U; dst_o := 0.U; src_o := 0.U;
@@ -197,7 +199,8 @@ class TensorAluPipelined(debug: Boolean = false)(implicit p: Parameters) extends
   val stateBits = 2
   val inflightBits = 4
   val dataSplitFactor = p(CoreKey).blockOutFactor
-
+  // datasplit factor = 1
+  println(s"dataSplitFactor:${dataSplitFactor}")
   val sIdle::sRun::sWait::Nil = Enum(3)
   val state = RegInit(init=sIdle)
   val inflight = RegInit(0.U(inflightBits.W))
@@ -208,6 +211,7 @@ class TensorAluPipelined(debug: Boolean = false)(implicit p: Parameters) extends
   // State Machine for compute io.done correctly
   io.done := false.B
   when(state === sIdle && io.start) {
+    printf(p"inst: ${io.dec}\n")
     state := sRun
   }.elsewhen(state === sRun && index_generator.io.last) {
     state := sWait
@@ -254,6 +258,7 @@ class TensorAluPipelined(debug: Boolean = false)(implicit p: Parameters) extends
 
   val uop_data_r1 = ShiftRegister(io.uop.data, aluDataReadPipeDelay)
 
+  // calc src, dst offset with uop
   val dst_offset = uop_data_r1.bits.u0
 
   val w = dst_offset.getWidth
@@ -285,6 +290,7 @@ class TensorAluPipelined(debug: Boolean = false)(implicit p: Parameters) extends
   }
 
   require(io.out.splitWidth == 1 && io.out.splitLength == 1, "-F- Out split write is not supported")
+  // numvecunit = 1
   val numVecUnits = dataSplitFactor
   val outData = Wire(io.out.wr(0).bits.data.cloneType)
   val dataRemapB = Wire(Vec(numVecUnits, io.acc.rd(0).data.bits.cloneType))
@@ -299,7 +305,7 @@ class TensorAluPipelined(debug: Boolean = false)(implicit p: Parameters) extends
 
   for (idx <- 0 until numVecUnits) {
     val alu = Module(new AluVector)
-
+    //println(s"alu tensor type: ${alu.io.acc_a.tensorType},${alu.io.acc_b.tensorType}")
     for(aluLenIdx <- 0 until alu.io.acc_b.lenSplit) {
       for(aluWdtIdx <- 0 until alu.io.acc_b.widthSplit) {
         val (accGrpIdx, accLenIdx, accWdtIdx) =
@@ -598,4 +604,4 @@ class TensorAluOrig(debug: Boolean = false)(implicit p: Parameters) extends Tens
   }
 }
 
-class TensorAlu(debug: Boolean = false)(implicit p: Parameters) extends TensorAluPipelined(debug)
+class TensorAlu(debug: Boolean = true)(implicit p: Parameters) extends TensorAluPipelined(debug)

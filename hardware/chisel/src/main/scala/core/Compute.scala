@@ -36,7 +36,7 @@ import vta.shell._
  * - Compute ALU instructions (tensorAlu module)
  * - Compute GEMM instructions (tensorGemm module)
  */
-class Compute(debug: Boolean = false)(implicit val p: Parameters) extends Module {
+class Compute(debug: Boolean = true)(implicit val p: Parameters) extends Module {
   val mp = p(ShellKey).memParams
   val io = IO(new Bundle {
     val i_post = Vec(2, Input(Bool()))
@@ -50,6 +50,8 @@ class Compute(debug: Boolean = false)(implicit val p: Parameters) extends Module
     val out = new TensorMaster(tensorType = "out")
     val finish = Output(Bool())
     val acc_wr_event = Output(Bool())
+    val is_start = Output(Bool())
+    val is_done = Output(Bool())
   })
   val sIdle :: sSync :: sExe :: Nil = Enum(3)
   val state = RegInit(sIdle)
@@ -99,6 +101,7 @@ class Compute(debug: Boolean = false)(implicit val p: Parameters) extends Module
   switch(state) {
     is(sIdle) {
       when(start) {
+        printf(p"[ComputeDecode] ${dec.io}\n")
         when(dec.io.isSync) {
           state := sSync
         }.elsewhen(inst_type.orR) {
@@ -232,11 +235,24 @@ class Compute(debug: Boolean = false)(implicit val p: Parameters) extends Module
 
   // finish
   io.finish := state === sExe & done & dec.io.isFinish
-
+  io.is_start := state === sIdle && start && (!dec.io.isSync)
+  io.is_done := (state === sExe & done) 
   // debug
   if (debug) {
     // start
     when(state === sIdle && start) {
+      when(dec.io.push_next){
+        printf("[Compute] push next\n")
+      }
+      when(dec.io.push_prev){
+        printf("[Compute] push_prev\n")
+      }
+      when(dec.io.pop_next){
+        printf("[Compute] pop_next\n")
+      }
+      when(dec.io.pop_prev){
+        printf("[Compute] pop_prev\n")
+      }
       when(dec.io.isSync) {
         printf("[Compute] start sync\n")
       }.elsewhen(dec.io.isLoadUop) {
